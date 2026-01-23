@@ -1,0 +1,12 @@
+{
+  "apt": {
+    "packages": [
+      "openssh-server",
+      "jq",
+      "fzf"
+    ]
+  },
+  "snap": {
+    "packages": []
+  }
+}
