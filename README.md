@@ -6,6 +6,7 @@ WSL2のUbuntu環境をセットアップするためのスクリプト集です�
 
 - `install-packages.sh` - packages.jsonに基づいてapt/snapパッケージをインストール
 - `setup-git.sh` - Gitのグローバル設定を対話的に行う
+- `setup-volta.sh` - Volta (Node.jsバージョンマネージャー) をインストール
 - `setup-mdns.sh` - mDNS (.local) 名前解決を設定
 - `setup-autofs.sh` - SMB共有をautofsでオンデマンド自動マウント
 - `packages.json` - インストールするパッケージのリスト
@@ -58,7 +59,22 @@ Git のを設定します。
 - デフォルトブランチ名(default: main)
 - デフォルトエディタ(default: vim)
 
-### 3. mDNS (.local) 名前解決のセットアップ
+### 3. Voltaのセットアップ
+
+Volta (Node.jsバージョンマネージャー) をインストールします。
+
+```bash
+./setup-volta.sh
+```
+
+このスクリプトは以下を実行します:
+- Voltaのインストール
+- オプションでNode.js (最新LTSまたは指定バージョン) のインストール
+- オプションでYarn (パッケージマネージャー) のインストール
+
+**注意:** インストール後、変更を有効にするためにシェルを再起動するか、`source ~/.bashrc` を実行してください。
+
+### 4. mDNS (.local) 名前解決のセットアップ
 
 WSL2 mirrorモードで `.local` ドメインの名前解決を有効にします。
 
@@ -82,7 +98,7 @@ dnsTunneling=false
 
 詳細については[Microsoft公式ドキュメント](https://learn.microsoft.com/en-us/windows/wsl/troubleshooting#networking-considerations-with-dns-tunneling)を参照してください。
 
-### 4. SMB共有の自動マウント (autofs)
+### 5. SMB共有の自動マウント (autofs)
 
 WindowsやNAS上のSMB共有をautofsでオンデマンドにマウントします。mDNSが遅い場合はIPを使うこともできます。
 
