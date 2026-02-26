@@ -193,7 +193,8 @@ test_mount() {
 # 既存設定のチェック
 check_existing_config() {
     local mount_point=$1
-    local basename=$(basename "$mount_point")
+    local parent_dir=$(dirname "$mount_point")
+    local mount_name=$(basename "$mount_point")
     
     # マウントポイントが既にマウント中かチェック
     if mountpoint -q "$mount_point" 2>/dev/null; then
@@ -205,43 +206,77 @@ check_existing_config() {
         fi
     fi
     
-    # 既存のautofs設定をチェック
+    # 既存のautofs設定をチェック（親ディレクトリ単位）
     if [ -d "/etc/auto.master.d" ]; then
-        local existing_configs=$(grep -r "^$(dirname "$mount_point") " /etc/auto.master.d/ 2>/dev/null | cut -d: -f1 || true)
+        local existing_configs=$(grep -r "^$(echo "$parent_dir" | sed 's/[\/&]/\\&/g') " /etc/auto.master.d/ 2>/dev/null | cut -d: -f1 || true)
         if [ -n "$existing_configs" ]; then
-            log_warning "同じ親ディレクトリの設定が既に存在します:"
+            log_info "同じ親ディレクトリ ($parent_dir) の設定が既に存在します:"
             echo "$existing_configs"
+            log_info "新しいマウント名 ($mount_name) はこの設定に追加されます"
         fi
     fi
     
     return 0
 }
 
-# autofs設定の生成
+# マウント名の重複チェック
+check_mount_name_conflict() {
+    local map_file=$1
+    local mount_name=$2
+    
+    if [ ! -f "$map_file" ]; then
+        return 0
+    fi
+    
+    if grep -q "^$mount_name " "$map_file" 2>/dev/null; then
+        log_error "マウント名 '$mount_name' は既に '$map_file' に存在します"
+        return 1
+    fi
+    
+    return 0
+}
+
+# autofs設定の生成・追記
 create_autofs_config() {
     local host=$1
     local share=$2
     local mount_point=$3
     local creds_file=$4
+    local host_id=$5
     
     local parent_dir=$(dirname "$mount_point")
     local mount_name=$(basename "$mount_point")
-    local host_id=$5
-    local safe_name=$(echo "${host_id}-${share}" | tr '.:' '--')
     
-    local master_file="/etc/auto.master.d/${safe_name}.autofs"
-    local map_file="/etc/auto.cifs-${safe_name}"
+    # 親ディレクトリから安全な名前を作成
+    local parent_safe=$(echo "$parent_dir" | sed 's/^[/]//; s/[/]/-/g' | tr '.:' '--')
+    [ -z "$parent_safe" ] && parent_safe="root"
     
-    log_info "autofs設定を作成中..."
+    local master_file="/etc/auto.master.d/${parent_safe}.autofs"
+    local map_file="/etc/auto.cifs-${parent_safe}"
     
-    # マスターファイル作成
-    echo "$parent_dir $map_file" | sudo tee "$master_file" > /dev/null
-    log_success "マスターファイルを作成しました: $master_file"
+    log_info "autofs設定を生成中..."
+    log_info "マウント親ディレクトリ: $parent_dir"
+    log_info "マスターファイル: $master_file"
+    log_info "マップファイル: $map_file"
     
-    # マップファイル作成
-    echo "$mount_name -fstype=cifs,rw,iocharset=utf8,vers=3.0,credentials=$creds_file ://$host/$share" | sudo tee "$map_file" > /dev/null
+    # マウント名の重複チェック
+    if ! check_mount_name_conflict "$map_file" "$mount_name"; then
+        return 1
+    fi
+    
+    # マスターファイルが存在しない場合のみ作成
+    if [ ! -f "$master_file" ]; then
+        echo "$parent_dir $map_file" | sudo tee "$master_file" > /dev/null
+        log_success "マスターファイルを作成しました: $master_file"
+    else
+        log_info "マスターファイルは既に存在します: $master_file"
+    fi
+    
+    # 新しいエントリをマップファイルに追記
+    local new_entry="$mount_name -fstype=cifs,rw,iocharset=utf8,vers=3.0,credentials=$creds_file ://$host/$share"
+    echo "$new_entry" | sudo tee -a "$map_file" > /dev/null
     sudo chmod -x "$map_file"
-    log_success "マップファイルを作成しました: $map_file"
+    log_success "マップファイルにエントリを追記しました: $map_file"
     
     # 親ディレクトリ作成
     if [ ! -d "$parent_dir" ]; then
@@ -249,24 +284,37 @@ create_autofs_config() {
         log_success "親ディレクトリを作成しました: $parent_dir"
     fi
     
-    echo "$master_file|$map_file"
+    echo "$master_file|$map_file|$mount_name"
 }
 
-# autofs設定の削除（ロールバック用）
+# autofs設定の部分削除（ロールバック用）
 rollback_config() {
     local master_file=$1
     local map_file=$2
+    local mount_name=$3
     
     log_warning "設定をロールバックしています..."
     
-    if [ -f "$master_file" ]; then
-        sudo rm -f "$master_file"
-        log_info "マスターファイルを削除しました: $master_file"
-    fi
-    
+    # マップファイルから該当エントリを削除
     if [ -f "$map_file" ]; then
-        sudo rm -f "$map_file"
-        log_info "マップファイルを削除しました: $map_file"
+        local line_count=$(sudo wc -l < "$map_file")
+        local entry_count=$(sudo grep -c "^$mount_name " "$map_file" || true)
+        
+        # エントリを削除
+        sudo sed -i "/^$mount_name /d" "$map_file"
+        log_info "マップファイルからエントリを削除しました: $map_file"
+        
+        # マップファイルが空になった場合はマスターファイルも削除
+        local remaining=$(sudo wc -l < "$map_file" || echo 0)
+        if [ "$remaining" -eq 0 ]; then
+            sudo rm -f "$map_file"
+            log_info "マップファイルが空になったため削除しました: $map_file"
+            
+            if [ -f "$master_file" ]; then
+                sudo rm -f "$master_file"
+                log_info "マスターファイルを削除しました: $master_file"
+            fi
+        fi
     fi
 }
 
@@ -440,8 +488,15 @@ EOF
     # ステップ6: autofs設定の生成
     # ログ出力が混ざらないよう関数の最終行のみ取得
     CONFIG_FILES=$(create_autofs_config "$HOST" "$SHARE" "$MOUNT_POINT" "$creds_file" "$HOST_ID" | tail -n 1)
+    if [ -z "$CONFIG_FILES" ]; then
+        log_error "autofs設定の生成に失敗しました"
+        sudo rm -f "$creds_file"
+        exit 1
+    fi
+    
     MASTER_FILE=$(echo "$CONFIG_FILES" | cut -d'|' -f1)
     MAP_FILE=$(echo "$CONFIG_FILES" | cut -d'|' -f2)
+    MOUNT_NAME=$(echo "$CONFIG_FILES" | cut -d'|' -f3)
     echo
     
     # autofsの有効化と再起動
@@ -455,7 +510,7 @@ EOF
         log_success "autofsサービスを再起動しました"
     else
         log_error "autofsサービスの再起動に失敗しました"
-        rollback_config "$MASTER_FILE" "$MAP_FILE"
+        rollback_config "$MASTER_FILE" "$MAP_FILE" "$MOUNT_NAME"
         sudo rm -f "$creds_file"
         exit 1
     fi
@@ -474,14 +529,18 @@ EOF
         echo "マウントポイント: $MOUNT_POINT"
         echo "リモート: //$HOST/$SHARE"
         echo
-        echo "作成されたファイル:"
+        echo "作成・更新されたファイル:"
         echo "  マスター: $MASTER_FILE"
         echo "  マップ  : $MAP_FILE"
         echo "  認証情報: $creds_file"
         echo
+        echo "マップファイルの内容例:"
+        echo "  $(sudo tail -n 1 "$MAP_FILE")"
+        echo
         echo "確認コマンド:"
         echo "  ls $MOUNT_POINT"
         echo "  df -h | grep $MOUNT_POINT"
+        echo "  cat $MAP_FILE"
         echo
     else
         log_warning "自動マウントに失敗しました"

@@ -121,12 +121,13 @@ ls /Volumes/books
 
 #### 生成されるファイル
 
-- `/etc/auto.master.d/<HOST_ID>-<SHARE>.autofs` - マスター設定（例: `/Volumes /etc/auto.cifs-<HOST_ID>-<SHARE>`）
-- `/etc/auto.cifs-<HOST_ID>-<SHARE>` - マップ設定（`books`キーを`://host/share`でCIFSに割り当て）
+- `/etc/auto.master.d/<MOUNT_PARENT>.autofs` - マスター設定（マウント親ディレクトリ単位、例: `/Volumes /etc/auto.cifs-volumes`）
+- `/etc/auto.cifs-<MOUNT_PARENT>` - マップ設定（複数のマウント定義を管理）
 - `/etc/creds/<HOST_ID>-<SHARE>` - 認証情報（権限600）
 
 内部仕様:
 - SMBバージョンは`vers=3.0`、文字コードは`iocharset=utf8`
+- masterとmapはマウント親ディレクトリ単位で1つ管理され、複数の共有をマウントする場合はmapファイルに追記されます
 - autofsのSUNマップではUNCに`://host/share`形式を使用します（`//host/share`だとデコードで1本スラッシュになるため）
 
 #### トラブルシューティング
@@ -145,8 +146,16 @@ dmesg | tail -n 50
 クリーンアップ（設定の削除）:
 
 ```bash
-sudo rm /etc/auto.master.d/<HOST_ID>-<SHARE>.autofs \
-  /etc/auto.cifs-<HOST_ID>-<SHARE> \
-  /etc/creds/<HOST_ID>-<SHARE>
+# 特定のマウント設定を削除する場合
+# 例：/Volumes/books の CIFS マウントを削除
+sudo sed -i "/^books /d" /etc/auto.cifs-volumes  # mapファイルからエントリを削除
+sudo systemctl restart autofs
+
+# 親ディレクトリ配下のすべてのマウント設定を削除する場合（例：/Volumes全体）
+sudo rm /etc/auto.master.d/volumes.autofs \
+  /etc/auto.cifs-volumes
+sudo rm /etc/creds/hostname-books \
+  /etc/creds/hostname-video
+# 等（認証情報ファイルはすべて削除）
 sudo systemctl restart autofs
 ```
