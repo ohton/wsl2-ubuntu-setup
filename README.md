@@ -127,6 +127,7 @@ ls /Volumes/books
 
 内部仕様:
 - SMBバージョンは`vers=3.0`、文字コードは`iocharset=utf8`
+- CIFSマウント時に`uid,gid`を自動設定します（`sudo`実行時は実行ユーザーの`SUDO_UID/SUDO_GID`を優先）
 - masterとmapはマウント親ディレクトリ単位で1つ管理され、複数の共有をマウントする場合はmapファイルに追記されます
 - autofsのSUNマップではUNCに`://host/share`形式を使用します（`//host/share`だとデコードで1本スラッシュになるため）
 

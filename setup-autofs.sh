@@ -140,6 +140,8 @@ test_mount() {
     local host=$1
     local share=$2
     local creds_file=$3
+    local mount_uid=$4
+    local mount_gid=$5
     
     TEMP_MOUNT=$(mktemp -d)
     log_info "一時マウントテストを実行中 ($TEMP_MOUNT)..."
@@ -147,10 +149,11 @@ test_mount() {
     # デバッグ情報
     log_info "マウントコマンド: mount -t cifs //$host/$share $TEMP_MOUNT"
     log_info "認証情報ファイル: $creds_file"
+    log_info "マウント所有者: uid=$mount_uid gid=$mount_gid"
     
     local mount_error=$(mktemp)
     # verboseモードで実行
-    if sudo mount -t cifs "//$host/$share" "$TEMP_MOUNT" -o "credentials=$creds_file,iocharset=utf8,vers=3.0" -v 2>"$mount_error"; then
+    if sudo mount -t cifs "//$host/$share" "$TEMP_MOUNT" -o "credentials=$creds_file,iocharset=utf8,vers=3.0,uid=$mount_uid,gid=$mount_gid" -v 2>"$mount_error"; then
         log_success "マウントテストが成功しました"
         
         # 読み取りテスト
@@ -181,7 +184,7 @@ test_mount() {
         echo
         log_info "トラブルシューティング:"
         echo "  1. 手動でマウントを試す:"
-        echo "     sudo mount -t cifs //$host/$share /mnt -o username=$USERNAME,password=***,vers=3.0"
+        echo "     sudo mount -t cifs //$host/$share /mnt -o username=$USERNAME,password=***,vers=3.0,uid=$mount_uid,gid=$mount_gid"
         echo "  2. SMBバージョンを変更して試す:"
         echo "     vers=2.0, vers=2.1, vers=3.0, vers=3.1.1"
         echo "  3. カーネルログを確認: dmesg | grep -i cifs"
@@ -243,6 +246,8 @@ create_autofs_config() {
     local mount_point=$3
     local creds_file=$4
     local host_id=$5
+    local mount_uid=$6
+    local mount_gid=$7
     
     local parent_dir=$(dirname "$mount_point")
     local mount_name=$(basename "$mount_point")
@@ -273,7 +278,7 @@ create_autofs_config() {
     fi
     
     # 新しいエントリをマップファイルに追記
-    local new_entry="$mount_name -fstype=cifs,rw,iocharset=utf8,vers=3.0,credentials=$creds_file ://$host/$share"
+    local new_entry="$mount_name -fstype=cifs,rw,iocharset=utf8,vers=3.0,uid=$mount_uid,gid=$mount_gid,credentials=$creds_file ://$host/$share"
     echo "$new_entry" | sudo tee -a "$map_file" > /dev/null
     sudo chmod -x "$map_file"
     log_success "マップファイルにエントリを追記しました: $map_file"
@@ -327,6 +332,12 @@ main() {
     
     # 依存関係チェック
     check_dependencies
+    echo
+
+    # マウント時の所有者（sudo実行時は呼び出し元ユーザーを優先）
+    local MOUNT_UID="${SUDO_UID:-$(id -u)}"
+    local MOUNT_GID="${SUDO_GID:-$(id -g)}"
+    log_info "CIFSマウントの所有者を uid=$MOUNT_UID gid=$MOUNT_GID に設定します"
     echo
     
     # ステップ1: ホスト入力
@@ -435,7 +446,7 @@ EOF
     log_info "認証情報ファイルを作成しました"
     
     # ステップ4: 一時マウントテスト
-    if ! test_mount "$HOST" "$SHARE" "$TEMP_CREDS"; then
+    if ! test_mount "$HOST" "$SHARE" "$TEMP_CREDS" "$MOUNT_UID" "$MOUNT_GID"; then
         log_error "マウントテストに失敗しました。処理を中止します。"
         exit 1
     fi
@@ -487,7 +498,7 @@ EOF
     
     # ステップ6: autofs設定の生成
     # ログ出力が混ざらないよう関数の最終行のみ取得
-    CONFIG_FILES=$(create_autofs_config "$HOST" "$SHARE" "$MOUNT_POINT" "$creds_file" "$HOST_ID" | tail -n 1)
+    CONFIG_FILES=$(create_autofs_config "$HOST" "$SHARE" "$MOUNT_POINT" "$creds_file" "$HOST_ID" "$MOUNT_UID" "$MOUNT_GID" | tail -n 1)
     if [ -z "$CONFIG_FILES" ]; then
         log_error "autofs設定の生成に失敗しました"
         sudo rm -f "$creds_file"
